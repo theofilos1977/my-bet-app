@@ -3,73 +3,72 @@ import joblib
 import numpy as np
 import pandas as pd
 
-# 1. Ρυθμίσεις σελίδας
-st.set_page_config(page_title="AI Match Predictor", layout="centered")
+st.set_page_config(page_title="AI Bet Predictor", layout="centered")
 
 st.title("⚽ AI Match Analysis")
-st.write("Εισάγετε τις αποδόσεις του ΟΠΑΠ.")
+st.info("Το μοντέλο αναλύει τις αποδόσεις βάσει του ιστορικού σας αρχείου.")
 
-# 2. Λίστα μοντέλων
 model_names = ['res', 'u15', 'o15', 'u25', 'o25', 'u35', 'o35', 'gg', 'ng']
 
 @st.cache_resource
 def load_models():
     loaded_models = {}
     for name in model_names:
-        filename = f'model_{name}.pkl'
-        loaded_models[name] = joblib.load(filename)
+        try:
+            loaded_models[name] = joblib.load(f'model_{name}.pkl')
+        except:
+            loaded_models[name] = None
     return loaded_models
 
-try:
-    models = load_models()
+models = load_models()
 
-    # 3. Είσοδος δεδομένων
-    st.subheader("1. Εισαγωγή Αποδόσεων")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        o1 = st.number_input("Άσος (1)", value=2.10, step=0.01, format="%.2f")
-    with col2:
-        ox = st.number_input("Ισοπαλία (X)", value=3.20, step=0.01, format="%.2f")
-    with col3:
-        o2 = st.number_input("Διπλό (2)", value=3.40, step=0.01, format="%.2f")
+# --- ΕΙΣΟΔΟΣ ---
+col1, col2, col3 = st.columns(3)
+with col1: o1 = st.number_input("Άσος (1)", value=2.10, format="%.2f")
+with col2: ox = st.number_input("Ισοπαλία (X)", value=3.20, format="%.2f")
+with col3: o2 = st.number_input("Διπλό (2)", value=3.40, format="%.2f")
 
-    if st.button("📊 ΥΠΟΛΟΓΙΣΜΟΣ ΠΙΘΑΝΟΤΗΤΩΝ"):
-        input_data = np.array([[o1, ox, o2]])
-
-        # 4. Πρόβλεψη 1-X-2
-        st.divider()
-        st.subheader("🎯 Πιθανότητες Σημείου (1-X-2)")
-        prob_1x2 = models['res'].predict_proba(input_data)[0]
-        classes_1x2 = models['res'].classes_
+if st.button("📊 ΑΝΑΛΥΣΗ ΑΓΩΝΑ"):
+    input_data = np.array([[o1, ox, o2]])
+    
+    # --- 1-X-2 ΔΙΟΡΘΩΜΕΝΟ ---
+    st.subheader("🎯 Πιθανότητες 1-X-2")
+    if models['res']:
+        probs = models['res'].predict_proba(input_data)[0]
+        labels = models['res'].classes_
         
-        cols = st.columns(len(classes_1x2))
-        for idx, label in enumerate(classes_1x2):
-            val = prob_1x2[idx] * 100
-            # Διόρθωση ονόματος X
-            lbl = str(label).strip().upper()
-            display_label = "X" if lbl in ['X', 'R'] else label
-            cols[idx].metric(f"Σημείο {display_label}", f"{val:.1f}%")
+        # Μαζεύουμε όλα τα πιθανά "X" σε μια μεταβλητή
+        final_probs = {"1": 0.0, "X": 0.0, "2": 0.0}
+        for lbl, pr in zip(labels, probs):
+            s_lbl = str(lbl).strip().upper()
+            if s_lbl in ['1', '1.0']: final_probs["1"] += pr
+            elif s_lbl in ['2', '2.0']: final_probs["2"] += pr
+            else: final_probs["X"] += pr # Οτιδήποτε άλλο (X, R, κενό) πάει στο X
+            
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Άσος (1)", f"{final_probs['1']*100:.1f}%")
+        c2.metric("Ισοπαλία (X)", f"{final_probs['X']*100:.1f}%")
+        c3.metric("Διπλό (2)", f"{final_probs['2']*100:.1f}%")
 
-        # 5. Πρόβλεψη Goals & GG/NG
-        st.subheader("📈 Αγορές Goals & GG")
-        
-        def get_p(m_key):
-            p_array = models[m_key].predict_proba(input_data)[0]
-            if len(p_array) > 1:
-                return f"{p_array[1]*100:.1f}%"
-            else:
-                return "0.0%" if models[m_key].classes_[0] == 0 else "100.0%"
-
-        results = {
-            "Αγορά": ["Under 1.5", "Over 1.5", "Under 2.5", "Over 2.5", "Under 3.5", "Over 3.5", "Goal/Goal", "No Goal"],
-            "Πιθανότητα %": [
-                get_p('u15'), get_p('o15'), get_p('u25'), get_p('o25'),
-                get_p('u35'), get_p('o35'), get_p('gg'), get_p('ng')
-            ]
-        }
-        st.table(pd.DataFrame(results))
-
-except FileNotFoundError:
-    st.error("⚠️ Σφάλμα: Δεν βρέθηκαν τα αρχεία .pkl.")
-except Exception as e:
-    st.error(f"⚠️ Κάτι πήγε στραβά: {e}")
+    # --- GOALS & GG ---
+    st.subheader("📈 Αγορές Goals & GG")
+    
+    data = []
+    markets = [
+        ('Under 1.5', 'u15'), ('Over 1.5', 'o15'),
+        ('Under 2.5', 'u25'), ('Over 2.5', 'o25'),
+        ('Under 3.5', 'u35'), ('Over 3.5', 'o35'),
+        ('Goal/Goal', 'gg'), ('No Goal', 'ng')
+    ]
+    
+    for title, key in markets:
+        m = models[key]
+        if m and len(m.classes_) > 1:
+            p = m.predict_proba(input_data)[0][1] * 100
+            if p > 0: # Δείξε μόνο όσα έχουν πιθανότητα
+                data.append({"Αγορά": title, "Πιθανότητα": f"{p:.1f}%"})
+    
+    if data:
+        st.table(pd.DataFrame(data))
+    else:
+        st.warning("Δεν υπάρχουν αρκετά δεδομένα για τις αγορές Goals στο τρέχον μοντέλο.")
